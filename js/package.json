@@ -1,0 +1,29 @@
+{
+  "name": "iota-test",
+  "version": "1.0.0",
+  "description": "a small test to use js iota librayr",
+  "main": "main.js",
+  "other": "other.js",
+  "devDependencies": {},
+  "scripts": {
+    "test": "mocha",
+    "pay": "node main.js",
+    "balancemonitor": "node balance_monitor.js",
+    "server": "http-server ./server"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@iota/client": "^0.6.1",
+    "@iota/mam": "^0.7.3",
+    "@iota/wallet": "^0.4.2",
+    "@mysql/xdevapi": "^8.0.25",
+    "assert": "^2.0.0",
+    "dotenv": "^10.0.0",
+    "http-server": "^0.12.3",
+    "mocha": "^9.0.1",
+    "mysql": "^2.18.1",
+    "mysql2": "^2.2.5",
+    "neon": "^2.0.0"
+  }
+}
