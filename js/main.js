@@ -13,7 +13,7 @@ async function setup() {
 
     const addresses = await client.getAddresses(secret)
     .accountIndex(0)
-    .range(0, 5)
+    .range(0, 10)
     .get();
     console.log("logging addresses: \n")
     console.log(addresses)
@@ -52,9 +52,10 @@ async function setup() {
 async function output_tests(){
     const addresses = await client.getAddresses(secret)
     .accountIndex(0)
-    .range(0, 5)
+    .range(0, 200)
     .get();
-    console.log("logging addresses: \n")
+
+    console.log("logging addresses: aaa\n")
     console.log(addresses)
     const address = addresses[0];
     const sampleData = JSON.stringify({

@@ -1,10 +1,36 @@
 fs = require('fs');
 const assert = require('assert')
-
 const { ClientBuilder, AddressGetter } = require('@iota/client'); 
 const mysql = require('mysql2/promise');
-const { iotaMysqlConnector, iotaPaymentMonitor, iotaEncryption } = require('../iotaPaymentMonitor');
+const crypto = require('crypto')
+const { iotaMysqlConnector, iotaPaymentMonitor, iotaEncryption, iotaDataWriter } = require('../iotaPaymentMonitor');
+const {createCipheriv, createDecipheriv, createSign, createVerify, generateKeyPairSync} = require('crypto');
+const { setUncaughtExceptionCaptureCallback } = require('process');
 require('dotenv').config()
+const { fromKeyLike } = require('jose/jwk/from_key_like');
+const { createImportSpecifier } = require('typescript');
+const { serializePayload } = require('@iota/iota.js');
+const private_key_precursor = process.env.PRIVATE_KEY;
+const public_key_precursor = process.env.PUBLIC_KEY;
+const private_key = crypto.createPrivateKey({
+  'key': private_key_precursor,
+  'format': 'pem',
+  'type': 'sec1',
+})
+const public_key = crypto.createPublicKey({
+  'key': public_key_precursor,
+   type: 'spki',
+   format: 'pem'
+
+})
+        // let optionsPublicKey = {
+        //   type: 'spki',
+        //   format: 'pem'
+
+        // }
+       
+const sample_payload = {"type":2,"index":"445241454745525f504f435f5041594d454e5453","data":"0410a67c74c8450b0b3b049f652d8bf27251c84372f11c18b1b95bdeb71490f345e69426c379ae428660f8dd35e8dc6536c87d8d19a77c977aa71469fcbd4d0c5c"};
+
 
 async function db_setup(mysql_connection){
     let db_setup = fs.readFileSync('test/test_db_script.sql', 'utf-8');
@@ -140,6 +166,22 @@ describe('iotaMysqlConnector', function() {
         let index = await mysqlConnector.getIotaIndex(sample_dev_eui);
         assert(index = sample_index)
     });
+    it('can insert ongoing transaction and increment count correctly', async() => {
+      await db_setup(connection);
+      try{
+      let id = await mysqlConnector.registerDevice(sample_dev_eui, sample_source_address, sample_index);
+      let [rows, x] = await connection.execute('SELECT * FROM sensors where sensor_id = ?',
+      [id])}catch(e){}
+
+      let crypt = new iotaEncryption(sample_payload)
+
+      await mysqlConnector.insertOngoingTransaction(sample_source_address, 'lmaokaii', crypt , 1, 0)
+      await mysqlConnector.__incrementTransactionCount(sample_source_address)
+      let res = await mysqlConnector.getOngoingTransactions(sample_source_address)
+      assert(res = [])
+      assert(index = sample_index)
+  });
+
     this.afterAll(()=>{
         connection.close()
     })
@@ -150,34 +192,24 @@ describe('iotaMysqlConnector', function() {
 })
 var iotaMonitor;
 describe('iotaPaymentMonitor', function() {
+  const sample_source_address = "atoi1qqydc70mpjdvl8l2wyseaseqwzhmedzzxrn4l9g2c8wdcsmhldz0ulwjxpz"
+  const sample_dev_eui = "187187187ABABADD"
+  const sample_index = "DRAEGER_SAMPLE_SENSOR"
     before(async function() {
         console.log('running...')
       // runs once before the first test in this block
       connection = await mysql.createConnection({...credentials, multipleStatements: true})
       await db_setup(connection);
     iotaMonitor = new iotaPaymentMonitor(connection);
+    let id = await iotaMonitor.registerDevice(sample_dev_eui, sample_source_address, sample_index);
+    let [rows, x] = await connection.execute('SELECT * FROM sensors where sensor_id = ?',
+    [id])
+
+    assert(rows[0].sensor_id == id, "sensor ids do not match!")
         
 
     });
-    const sample_source_address = "atoi1qqydc70mpjdvl8l2wyseaseqwzhmedzzxrn4l9g2c8wdcsmhldz0ulwjxpz"
-    const sample_dev_eui = "187187187ABABADD"
-    const sample_index = "DRAEGER_SAMPLE_SENSOR"
-    it('test device registration', async() => {
-        
-        let id = await iotaMonitor.registerDevice(sample_dev_eui, sample_source_address, sample_index);
-        let [rows, x] = await connection.execute('SELECT * FROM sensors where sensor_id = ?',
-        [id])
 
-        assert(rows[0].sensor_id == id, "sensor ids do not match!")
-      });
-
-      const other_accounts = [
-        'atoi1qrm30kqk25xf2htqm4d0g2fmgd6fkxmln9ug3td3q56k5y8pst3guhk3l2d',
-        'atoi1qzgr9044xughncdyh9ag6mutrryk76zn9as8d222e68v7v64affmv4aqynn',
-        'atoi1qz8ukqf5pc0u46n2tagfeewzl4cawxsp54sftncpvfz9ud2tgufksfjxj68',
-        'atoi1qppsdes89q7ynecnkvuygdc4xe23js9xfs66nx4h20u4qk8sk28ncefjxkm'
-        
-      ]
       it('can get new transactions on the tangle', async() => {
         let new_payments = await iotaMonitor.getNewTransactions(sample_source_address);
         // console.log(new_payments)
@@ -229,58 +261,146 @@ describe('iotaPaymentMonitor', function() {
         assert(! new_payments_resolved.includes(first_transaction) )
       });
       it('main loop works correctly', async() => {
+        let resolved = [];
+
         let unresolved = await iotaMonitor.getAllUnresolvedPaymentAddresses();
-        for (const payment of unresolved){
-            console.log(payment)
-            assert( 'payload' in unresolved_payments)
-            assert( 'output_id' in unresolved_payments)
-            assert( 'source_address' in unresolved_payments)
-            assert( 'sensor_address' in unresolved_payments)
-            assert(payment.source_address != payment.sensor_address);
-            await iotaMonitor.__resolveTransaction(payment.sensor_address, payment.output_id)
-        }
-        // return await iotaMonitor.mainLoop( async (unresolved_payments)=>{
-        //     for (const payment of unresolved_payments){
-        //         console.log(payment)
-        //         assert( 'payload' in unresolved_payments)
-        //         assert( 'output_id' in unresolved_payments)
-        //         assert( 'source_address' in unresolved_payments)
-        //         assert( 'sensor_address' in unresolved_payments)
-        //         assert(payment.source_address != payment.sensor_address);
-        //         await iotaMonitor.__resolveTransaction(payment.sensor_address, payment.output_id)
-        //     }
-        //     //now all payments should be resolved
-        let outstanding_payments = await iotaMonitor.getNewTransactions(sample_source_address)
+        let sens = await iotaMonitor.getNewTransactions(sample_source_address);
+        
+        unresolved.forEach(async(payment)=>{
+          assert( 'payload' in payment)
+          assert( 'output_id' in payment)
+          assert( 'source_address' in payment)
+          assert( 'sensor_address' in payment)
+          assert('message_id' in payment)
+          assert(payment.source_address != payment.sensor_address);
+          await iotaMonitor.__resolveTransaction(payment.sensor_address, payment.output_id) 
+          resolved.push(payment)
+
+        })
+        let unresolved_again = await iotaMonitor.getAllUnresolvedPaymentAddresses();
+        assert(unresolved_again.length === 0)
+        // console.log(await iotaMonitor.getNewTransactions(sample_source_address))
+
+        // console.log(unresolved_again)
        
-        setTimeout(function () {
-          assert(outstanding_payments.length == 0);
-          done();
-      }, 5000);
-
-
-      });
 
 
 
-
-      
-     
-
-
+      }).timeout(10000);
     
 })
 
 describe('iotaEncryption', function() {
-
-      
-  const sample_payload = {"type":2,"index":"34343532343134353437343535323566353034663433356635303431353934643435346535343533","data":"04b0eb5d6797d1cdbba306608a2ee9dbe468e9d4f31732bb183f8664d0d8965b40f1436c910e582018cac67848d74a3ff6b5d4e04681fc32b8e48e2020abfe8bb4"}
-  it('test device registration', async() => {
-        
-
+    it('test device registration', async() => {
        let crypt = new iotaEncryption(sample_payload)
-       console.log(crypt.getSecret())
+      //  console.log(crypt.getSecret())
         assert(true)
       });
+      
+      it('get public key', async() => {
+  
+        let crypt = new iotaEncryption(sample_payload)
+        // console.log("public key: ")
+        // console.log(crypt.getPublicKey())
+        
+        // console.log(crypt.getPublicKey().length)
+         assert(crypt.getPublicKey().length === 33)
+       });
+       it('__encrypt and decrypt in aes128 method', async() => {
+      
+        let crypt = new iotaEncryption(sample_payload)
+        let text = "hello, world!"
+        let ans = crypt.__encryptAES128(text, 'utf-8')
+        console.log(ans)
+        // now try to decrypt
+        let decipher = createDecipheriv('aes-128-cbc', crypt.secret.slice(0, 16), crypt.iv);
+        let decrypted = decipher.update(ans, 'binary', 'utf-8')
+        decrypted += decipher.final('utf-8')
+        // console.log(decrypted)
+        assert(decrypted === text)
+        
+        
+       });
+       it('create key', async() => {
+        // const curve = 'prime256v1';
+        // const { privateKey, publicKey } = generateKeyPairSync('ec', {
+        //   namedCurve: curve,
+        // });
+        // let options = {
+        //   type: 'sec1',
+        //   format: 'pem'
+        // }
+        // console.log(privateKey.export(options))
+        // let optionsPublicKey = {
+        //   type: 'spki',
+        //   format: 'pem'
+
+        // }
+        // console.log(publicKey.export(optionsPublicKey))
+        //  console.log(fromKeyLike(public_key))
+
+       
+      
+        let crypt = new iotaEncryption(sample_payload)
+        let text = "hello, world!"
+        let sig = iotaEncryption.SignECDSA(text, private_key)
+        //now try to verify
+        console.log('signature: '+ sig.length)
+        console.log(sig)
+
+        const verify = createVerify('SHA256');
+        verify.write(text);
+        verify.end();
+        assert(verify.verify(public_key, sig))
+        
+        
+       });
+       it('prepare a payload', async() => {
+
+        let crypt = new iotaEncryption(sample_payload)
+
+        let payload = crypt.generatePayload(private_key);
+        // now we try to decrypt everything
+        let pk = payload.slice(0, 33)
+        
+        
+        assert(Buffer.compare(pk, crypt.getPublicKey()) === 0)
+
+        let encrypted_index = payload.slice(33, 33+16);
+        let decipher = createDecipheriv('aes-128-cbc', crypt.secret.slice(0, 16), crypt.iv);
+        let decrypted = decipher.update(encrypted_index.toString('binary'), 'binary', 'utf-8')
+        decrypted += decipher.final('utf-8')
+
+        assert(crypt.index.toString('utf-8') === decrypted)
+
+        let signature = payload.slice(33+16)
+
+        const verify = createVerify('SHA256');
+        verify.write(payload.slice(0, 33 + 16));
+        verify.end();
+        assert(verify.verify(public_key, signature))
+
+        
+
+       });
+       it('signature verification', async() => {        
+
+        let msg = "02c242b3bd9ccd5ffa301814b9d517bd518eec82119615f921e0da5c6833db05abb2803141292323faa00777a02532270e30460221008c8522af294515537ed7fa02175681defbea782be16522a30c15e96e36bd59990221009f64994abefc74e648d3d3fbf1ba765017584f7ed6ca7317beec7a604f8167e7"
+        let payload = Buffer.from(msg, 'hex');
+
+        let signature = payload.slice(33+16)
+
+        const verify = createVerify('SHA256');
+        verify.write(payload.slice(0, 33 + 16));
+        verify.end();
+        const result = verify.verify(public_key, signature)
+        console.log(result);
+        assert(result === true)
+
+        
+
+       });
+       
 
 
 
@@ -291,3 +411,190 @@ describe('iotaEncryption', function() {
 
     
 })
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}  
+describe('stream', function() {
+  before(async function() {
+    console.log('running...')
+  // runs once before the first test in this block
+  connection = await mysql.createConnection({...credentials, multipleStatements: true})
+  await db_setup(connection);
+  mysqlConnector = new iotaMysqlConnector(connection);
+  iotaMonitor = new iotaPaymentMonitor(connection);
+  const sample_dev_eui = "187187187ABABADD"
+  const sample_index = "DRAEGER_SAMPLE_SENSOR"
+  const sample_address_stream = "atoi1qr7y55culqz9uqcqycwmzr2pl07cxfyke0rtty7wjp0f2akjmtvw7n3504a"
+  let id = await mysqlConnector.registerDevice(sample_dev_eui, sample_address_stream, sample_index);
+  let [rows, x] = await connection.execute('SELECT * FROM sensors where sensor_id = ?',
+  [id])
+
+  assert(rows[0].sensor_id == id, "sensor ids do not match!")
+
+    
+
+});
+    it('set up payment stream' , async() => {
+
+
+      //  console.log(crypt.getSecret())
+       await iotaMonitor.setUpNewPaymentStreams(private_key);
+
+      }).timeout(20000);
+      
+'33656632323030626639386665373136653463376464323435363065383933333237303363373334643336646366383432326236663465333436393464393732'
+
+
+
+      
+     
+
+
+    
+})
+const sample_dev_eui = "187187187ABABADD"
+  const sample_index = "DRAEGER_SAMPLE_SENSOR"
+  const sample_address_stream = "atoi1qr7y55culqz9uqcqycwmzr2pl07cxfyke0rtty7wjp0f2akjmtvw7n3504a"
+var dataWriter
+describe('Data Writer', function() {
+  this.timeout(5000);
+  before(async function() {
+    console.log('running...')
+  // runs once before the first test in this block
+  connection = await mysql.createConnection({...credentials, multipleStatements: true})
+  await db_setup(connection);
+  mysqlConnector = new iotaMysqlConnector(connection);
+  iotaMonitor = new iotaPaymentMonitor(connection);
+  dataWriter = new iotaDataWriter(connection, private_key)
+  let id = await mysqlConnector.registerDevice(sample_dev_eui, sample_address_stream, sample_index);
+  let [rows, x] = await connection.execute('SELECT * FROM sensors where sensor_id = ?',
+  [id])
+  let crypt = new iotaEncryption(sample_payload)
+  await iotaMonitor.insertOngoingTransaction(sample_address_stream, sample_address_stream, crypt )
+
+
+  assert(rows[0].sensor_id == id, "sensor ids do not match!")
+
+    
+
+});
+    it('prepend payload size works correctly:' , async() => {
+      let message = 'hello, beautiful world!';
+      payload = JSON.stringify(message);
+      payload = Buffer.from(message, 'utf-8');
+      let desired_length = payload.length
+      let pp = dataWriter.prependPayloadSize(payload);
+      let size = pp.slice(0, 4)
+      let size_num = size.readUInt32LE();
+      assert(size_num === desired_length);
+
+
+      });
+    
+      let aes_key = crypto.randomBytes(16);
+      let hash =  Buffer.from( crypto.createHash('sha256').update(aes_key).digest('hex') , 'hex' )
+      let iv = hash.slice(0, 16)
+
+      it('payload encryption works', async()=>{
+        let message = 'hello, beautiful world!';
+        let transaction_obj = 
+        {
+          session_key: aes_key,
+          init_vector: iv
+        }
+        let cipher = dataWriter.encryptPayload(transaction_obj, Buffer.from(message, 'utf-8'));
+        let decipher = createDecipheriv('aes-128-cbc', aes_key, iv);
+        let decrypted = Buffer.concat([decipher.update(cipher), decipher.final() ])
+        assert(message ===decrypted.toString('utf-8') )
+
+
+      })
+      it('payload preparation works' , async() => {
+        let message = 'hello, beautiful world!';
+        let transaction_obj = 
+        {
+          session_key: aes_key,
+          init_vector: iv
+        }
+        let final_payload = dataWriter.preparePayload(transaction_obj, message);
+
+
+        let decipher = createDecipheriv('aes-128-cbc', aes_key, iv);
+        let decrypted = Buffer.concat([decipher.update(final_payload), decipher.final() ])
+
+        let raw_message = decrypted;
+        let message_size = raw_message.slice(0, 4)
+        let size_num = message_size.readUInt32LE();
+
+        const verify = createVerify('SHA256');
+        let signature = raw_message.slice(size_num + 4);
+        let text = raw_message.slice(0, size_num + 4);
+        verify.write(text);
+        verify.end();
+        const result = verify.verify(public_key, signature)
+        assert(result === true)
+        });
+      let sample_transaction_stream = '07a787acdb939713f6d19be1077eed1be7a53e039f60ddd96231d4de8fb525960000'
+        it('can get send payload' , async() => {
+
+          let sent_msg = 'hello, encrypted world!'
+          let messages = await dataWriter.sendPayload(sample_dev_eui, sent_msg)
+          // console.log(messages)
+          let t_obj = await dataWriter.getOngoingTransactions(sample_address_stream);
+    
+    
+          }).timeout(60000);
+
+            it('can get payload sent on tangle and decrypt it' , async() => {
+              let sent_msg = 'hello, encrypted world!'
+              let messages = await dataWriter.sendPayload(sample_dev_eui, sent_msg)
+
+
+              // console.log(messages)
+              let t_obj = await dataWriter.getOngoingTransactions(sample_address_stream);
+              let resp = await dataWriter.client.getMessage().index(t_obj[0].idx)
+
+              for (const ans of resp){
+
+                  try
+                  {
+                    let msg = await dataWriter.client.getMessage().data(ans);
+
+                  let encrypted_message = Buffer.from(msg.message.payload.data, 'hex');
+
+                  let decipher = createDecipheriv('aes-128-cbc', t_obj[0].session_key.slice(0, 16), t_obj[0].init_vector);
+                  let decrypted = Buffer.concat([decipher.update(encrypted_message), decipher.final() ])
+                  let raw_message = decrypted
+                  let message_size = decrypted.slice(0, 4)
+                  let size_num = message_size.readUInt32LE();
+
+                  const verify = createVerify('SHA256');
+                  let signature = raw_message.slice(size_num + 4);
+                  let text = raw_message.slice(0, size_num + 4);
+                  verify.write(text);
+                  verify.end();
+                  const result = verify.verify(public_key, signature)
+
+                    let final_message = text.slice(4)
+
+                  console.log(result);
+                  assert(result === true)
+
+
+                  assert(final_message.toString('utf-8') === sent_msg)
+                  }
+                  catch(e){
+                    console.log(e);
+                  }
+              
+
+
+              }
+        
+        
+              }).timeout(60000);
+ 
+})
+
